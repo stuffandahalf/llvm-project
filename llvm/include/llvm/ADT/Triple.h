@@ -159,6 +159,7 @@ public:
     UnknownOS,
 
     Ananas,
+    ALiX,
     CloudABI,
     Darwin,
     DragonFly,

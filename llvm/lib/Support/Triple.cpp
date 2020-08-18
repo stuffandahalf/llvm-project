@@ -182,6 +182,7 @@ StringRef Triple::getOSTypeName(OSType Kind) {
   case UnknownOS: return "unknown";
 
   case AIX: return "aix";
+  case ALiX: return "alix";
   case AMDHSA: return "amdhsa";
   case AMDPAL: return "amdpal";
   case Ananas: return "ananas";

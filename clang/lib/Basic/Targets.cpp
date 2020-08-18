@@ -318,6 +318,8 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
     if (Triple.isOSDarwin())
       return new DarwinPPC32TargetInfo(Triple, Opts);
     switch (os) {
+	case llvm::Triple::ALiX:
+	  return new ALiXTargetInfo<PPC32TargetInfo>(Triple, Opts);
     case llvm::Triple::Linux:
       return new LinuxTargetInfo<PPC32TargetInfo>(Triple, Opts);
     case llvm::Triple::FreeBSD:
@@ -338,6 +340,8 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
     if (Triple.isOSDarwin())
       return new DarwinPPC64TargetInfo(Triple, Opts);
     switch (os) {
+	case llvm::Triple::ALiX:
+	  return new ALiXTargetInfo<PPC64TargetInfo>(Triple, Opts);
     case llvm::Triple::Linux:
       return new LinuxTargetInfo<PPC64TargetInfo>(Triple, Opts);
     case llvm::Triple::Lv2:
@@ -465,6 +469,8 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return new DarwinI386TargetInfo(Triple, Opts);
 
     switch (os) {
+	case llvm::Triple::ALiX:
+	  return new ALiXTargetInfo<X86_32TargetInfo>(Triple, Opts);
     case llvm::Triple::Ananas:
       return new AnanasTargetInfo<X86_32TargetInfo>(Triple, Opts);
     case llvm::Triple::CloudABI:
@@ -524,6 +530,8 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return new DarwinX86_64TargetInfo(Triple, Opts);
 
     switch (os) {
+	case llvm::Triple::ALiX:
+	  return new ALiXTargetInfo<X86_64TargetInfo>(Triple, Opts);
     case llvm::Triple::Ananas:
       return new AnanasTargetInfo<X86_64TargetInfo>(Triple, Opts);
     case llvm::Triple::CloudABI:
