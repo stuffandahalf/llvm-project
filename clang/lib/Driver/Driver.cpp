@@ -9,6 +9,7 @@
 #include "clang/Driver/Driver.h"
 #include "InputInfo.h"
 #include "ToolChains/AIX.h"
+#include "ToolChains/ALiX.h"
 #include "ToolChains/AMDGPU.h"
 #include "ToolChains/AVR.h"
 #include "ToolChains/Ananas.h"
@@ -4904,6 +4905,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
     switch (Target.getOS()) {
     case llvm::Triple::AIX:
       TC = std::make_unique<toolchains::AIX>(*this, Target, Args);
+      break;
+    case llvm::Triple::ALiX:
+      TC = std::make_unique<toolchains::ALiX>(*this, Target, Args);
       break;
     case llvm::Triple::Haiku:
       TC = std::make_unique<toolchains::Haiku>(*this, Target, Args);
