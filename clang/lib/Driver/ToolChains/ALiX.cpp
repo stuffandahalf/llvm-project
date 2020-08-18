@@ -169,32 +169,32 @@ using tools::addMultilibFlag;
 }*/
 
 void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
-                                   const InputInfo &Output,
-                                   const InputInfoList &Inputs,
-                                   const ArgList &Args,
-                                   const char *LinkingOutput) const {
+                                const InputInfo &Output,
+                                const InputInfoList &Inputs,
+                                const ArgList &Args,
+                                const char *LinkingOutput) const {
   const toolchains::ALiX &ToolChain =
       static_cast<const toolchains::ALiX &>(getToolChain());
   const Driver &D = ToolChain.getDriver();
-  
+
   ArgStringList CmdArgs;
-  
+
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
-  
+
   if (Output.isFilename()) {
     CmdArgs.push_back("-o");
     CmdArgs.push_back(Output.getFilename());
   } else {
     assert(Output.isNothing() && "Invalid output.");
   }
-  
+
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
-	// Add required start files
-	//const char *crt1 = "crt1.o"
-    //CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crt1)));  
+    // Add required start files
+    // const char *crt1 = "crt1.o"
+    // CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crt1)));
   }
-  
+
   Args.AddAllArgs(CmdArgs, options::OPT_L);
   ToolChain.AddFilePathLibArgs(Args, CmdArgs);
   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
@@ -203,17 +203,17 @@ void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_t);
   Args.AddAllArgs(CmdArgs, options::OPT_Z_Flag);
   Args.AddAllArgs(CmdArgs, options::OPT_r);
-  
+
   bool NeedsSanitizerDeps = addSanitizerRuntimes(ToolChain, Args, CmdArgs);
   bool NeedsXRayDeps = addXRayRuntime(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
-  
+
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
-	  // Add stdlib and default lib
+    // Add stdlib and default lib
   }
-  
+
   ToolChain.addProfileRTLibs(Args, CmdArgs);
-  
+
   const char *Exec = Args.MakeArgString(getToolChain().GetLinkerPath());
   C.addCommand(std::make_unique<Command>(
       JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
@@ -221,8 +221,7 @@ void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
 /// ALiX - ALiX tool chain which can call as(1) and ld(1) directly.
 
-ALiX::ALiX(const Driver &D, const llvm::Triple &Triple,
-                 const ArgList &Args)
+ALiX::ALiX(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     //: ToolChain(D, Triple, Args) {
     : Generic_ELF(D, Triple, Args) {
   getProgramPaths().push_back(getDriver().getInstalledDir());
@@ -253,8 +252,7 @@ ALiX::ALiX(const Driver &D, const llvm::Triple &Triple,
                           .flag("-fexceptions")
                           .flag("+fno-exceptions"));
   // ASan has higher priority because we always want the instrumentated version.
-  Multilibs.push_back(Multilib("asan", {}, {}, 2)
-                          .flag("+fsanitize=address"));
+  Multilibs.push_back(Multilib("asan", {}, {}, 2).flag("+fsanitize=address"));
   // Use the asan+noexcept variant with ASan and -fno-exceptions.
   Multilibs.push_back(Multilib("asan+noexcept", {}, {}, 3)
                           .flag("+fsanitize=address")
@@ -262,9 +260,8 @@ ALiX::ALiX(const Driver &D, const llvm::Triple &Triple,
                           .flag("+fno-exceptions"));
   Multilibs.FilterOut([&](const Multilib &M) {
     std::vector<std::string> RD = FilePaths(M);
-    return std::all_of(RD.begin(), RD.end(), [&](std::string P) {
-      return !getVFS().exists(P);
-    });
+    return std::all_of(RD.begin(), RD.end(),
+                       [&](std::string P) { return !getVFS().exists(P); });
   });
 
   Multilib::flags_list Flags;
@@ -283,17 +280,14 @@ ALiX::ALiX(const Driver &D, const llvm::Triple &Triple,
 }
 
 std::string ALiX::ComputeEffectiveClangTriple(const ArgList &Args,
-                                                 types::ID InputType) const {
+                                              types::ID InputType) const {
   llvm::Triple Triple(ComputeLLVMTriple(Args, InputType));
   return Triple.str();
 }
 
-Tool *ALiX::buildLinker() const {
-  return new tools::alix::Linker(*this);
-}
+Tool *ALiX::buildLinker() const { return new tools::alix::Linker(*this); }
 
-ToolChain::RuntimeLibType ALiX::GetRuntimeLibType(
-    const ArgList &Args) const {
+ToolChain::RuntimeLibType ALiX::GetRuntimeLibType(const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(clang::driver::options::OPT_rtlib_EQ)) {
     StringRef Value = A->getValue();
     if (Value != "compiler-rt")
@@ -304,28 +298,27 @@ ToolChain::RuntimeLibType ALiX::GetRuntimeLibType(
   return ToolChain::RLT_CompilerRT;
 }
 
-ToolChain::CXXStdlibType
-ALiX::GetCXXStdlibType(const ArgList &Args) const {
+ToolChain::CXXStdlibType ALiX::GetCXXStdlibType(const ArgList &Args) const {
   if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
     StringRef Value = A->getValue();
     if (Value != "libc++")
       getDriver().Diag(diag::err_drv_invalid_stdlib_name)
-        << A->getAsString(Args);
+          << A->getAsString(Args);
   }
 
   return ToolChain::CST_Libcxx;
 }
 
 void ALiX::addClangTargetOptions(const ArgList &DriverArgs,
-                                    ArgStringList &CC1Args,
-                                    Action::OffloadKind) const {
+                                 ArgStringList &CC1Args,
+                                 Action::OffloadKind) const {
   if (!DriverArgs.hasFlag(options::OPT_fuse_init_array,
                           options::OPT_fno_use_init_array, true))
     CC1Args.push_back("-fno-use-init-array");
 }
 
 void ALiX::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
-                                        ArgStringList &CC1Args) const {
+                                     ArgStringList &CC1Args) const {
   const Driver &D = getDriver();
 
   if (DriverArgs.hasArg(options::OPT_nostdinc))
@@ -361,7 +354,7 @@ void ALiX::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
 }
 
 void ALiX::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
-                                           ArgStringList &CC1Args) const {
+                                        ArgStringList &CC1Args) const {
   if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
       DriverArgs.hasArg(options::OPT_nostdincxx))
     return;
@@ -380,7 +373,7 @@ void ALiX::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
 }
 
 void ALiX::AddCXXStdlibLibArgs(const ArgList &Args,
-                                  ArgStringList &CmdArgs) const {
+                               ArgStringList &CmdArgs) const {
   switch (GetCXXStdlibType(Args)) {
   case ToolChain::CST_Libcxx:
     CmdArgs.push_back("-lc++");
@@ -421,7 +414,7 @@ SanitizerMask ALiX::getDefaultSanitizers() const {
 }
 
 void ALiX::addProfileRTLibs(const llvm::opt::ArgList &Args,
-                               llvm::opt::ArgStringList &CmdArgs) const {
+                            llvm::opt::ArgStringList &CmdArgs) const {
   // Add linker option -u__llvm_profile_runtime to cause runtime
   // initialization module to be linked in.
   if (needsProfileRT(Args))

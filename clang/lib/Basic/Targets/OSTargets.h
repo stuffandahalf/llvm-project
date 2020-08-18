@@ -75,7 +75,7 @@ public:
   ALiXTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : OSTargetInfo<Target>(Triple, Opts) {
     this->MCountName = "__mcount";
-    //this->TheCXXABI.set(TargetCXXABI::ALiX);
+    // this->TheCXXABI.set(TargetCXXABI::ALiX);
     this->TheCXXABI.set(TargetCXXABI::GenericItanium);
   }
 };
