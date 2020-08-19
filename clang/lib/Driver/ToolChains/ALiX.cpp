@@ -177,6 +177,14 @@ void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       static_cast<const toolchains::ALiX &>(getToolChain());
   const Driver &D = ToolChain.getDriver();
 
+  // Silence warning for "clang -g foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_g_Group);
+  // and "clang -emit-llvm foo.o -o foo"
+  Args.ClaimAllArgs(options::OPT_emit_llvm);
+  // and for "clang -w foo.o -o foo". Other warning options are already
+  // handled somewhere else.
+  Args.ClaimAllArgs(options::OPT_w);
+
   ArgStringList CmdArgs;
 
   if (!D.SysRoot.empty())
@@ -193,6 +201,8 @@ void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     // Add required start files
     // const char *crt1 = "crt1.o"
     // CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crt1)));
+
+    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);
