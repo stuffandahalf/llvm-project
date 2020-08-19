@@ -6,7 +6,7 @@ on:
         description: 'Upstream repository llvm/llvm-project.'
         required: true
         default: 'llvm/llvm-project'       # set the upstream repo
-      upstream:
+      upstream-branch:
         description: 'Upstream branch to merge from. Eg. master'
         required: true
         default: 'master'           # set the upstream branch to merge from
