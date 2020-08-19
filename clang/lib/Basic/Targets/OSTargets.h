@@ -55,6 +55,31 @@ public:
       : OSTargetInfo<Target>(Triple, Opts) {}
 };
 
+// ALiX Target
+template <typename Target>
+class LLVM_LIBRARY_VISIBILITY ALiXTargetInfo : public OSTargetInfo<Target> {
+protected:
+  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                    MacroBuilder &Builder) const override {
+    Builder.defineMacro("__ALIX");
+    Builder.defineMacro("__ELF__");
+    DefineStd(Builder, "unix", Opts);
+    if (Opts.POSIXThreads)
+      Builder.defineMacro("_REENTRANT");
+    // Required by the libc++ locale support.
+    if (Opts.CPlusPlus)
+      Builder.defineMacro("_GNU_SOURCE");
+  }
+
+public:
+  ALiXTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+      : OSTargetInfo<Target>(Triple, Opts) {
+    this->MCountName = "__mcount";
+    // this->TheCXXABI.set(TargetCXXABI::ALiX);
+    this->TheCXXABI.set(TargetCXXABI::GenericItanium);
+  }
+};
+
 // Ananas target
 template <typename Target>
 class LLVM_LIBRARY_VISIBILITY AnanasTargetInfo : public OSTargetInfo<Target> {

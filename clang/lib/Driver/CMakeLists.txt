@@ -34,6 +34,7 @@ add_clang_library(clangDriver
   ToolChains/Arch/VE.cpp
   ToolChains/Arch/X86.cpp
   ToolChains/AIX.cpp
+  ToolChains/ALiX.cpp
   ToolChains/Ananas.cpp
   ToolChains/AMDGPU.cpp
   ToolChains/AVR.cpp

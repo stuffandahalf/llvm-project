@@ -159,6 +159,7 @@ public:
     UnknownOS,
 
     Ananas,
+    ALiX,
     CloudABI,
     Darwin,
     DragonFly,
@@ -167,7 +168,7 @@ public:
     IOS,
     KFreeBSD,
     Linux,
-    Lv2,        // PS3
+    Lv2, // PS3
     MacOSX,
     NetBSD,
     OpenBSD,
@@ -177,15 +178,15 @@ public:
     Haiku,
     Minix,
     RTEMS,
-    NaCl,       // Native Client
+    NaCl, // Native Client
     AIX,
-    CUDA,       // NVIDIA CUDA
-    NVCL,       // NVIDIA OpenCL
-    AMDHSA,     // AMD HSA Runtime
+    CUDA,   // NVIDIA CUDA
+    NVCL,   // NVIDIA OpenCL
+    AMDHSA, // AMD HSA Runtime
     PS4,
     ELFIAMCU,
-    TvOS,       // Apple tvOS
-    WatchOS,    // Apple watchOS
+    TvOS,    // Apple tvOS
+    WatchOS, // Apple watchOS
     Mesa3D,
     Contiki,
     AMDPAL,     // AMD PAL Runtime
