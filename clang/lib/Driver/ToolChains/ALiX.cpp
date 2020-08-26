@@ -197,12 +197,26 @@ void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     assert(Output.isNothing() && "Invalid output.");
   }
 
-  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
+  if (Args.hasArg(options::OPT_static)) {
+    CmdArgs.push_back("-Bstatic");
+  } else {
+    if (Args.hasArg(options::OPT_rdynamic))
+      CmdArgs.push_back("-export-dynamic");
+    if (Args.hasArg(options::OPT_shared)) {
+      CmdArgs.push_back("-Bshareable");
+    } else {
+      CmdArgs.push_back("-dynamic-linker");
+      CmdArgs.push_back("/libexec/ld-elf.so.1");
+    }
+  }
+
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles, options::OPT_nodefaultlibs)) {
     // Add required start files
     // const char *crt1 = "crt1.o"
     // CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crt1)));
-
-    CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
+    if (!Args.hasArg(options::OPT_shared)) {
+      CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath("crt0.o")));
+    }
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);
@@ -218,8 +232,8 @@ void alix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   bool NeedsXRayDeps = addXRayRuntime(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
-  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
-    // Add stdlib and default lib
+  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs, options::OPT_nolibc)) {
+    CmdArgs.push_back("-lc");
   }
 
   ToolChain.addProfileRTLibs(Args, CmdArgs);
