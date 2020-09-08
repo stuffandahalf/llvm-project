@@ -646,6 +646,12 @@ Sema::ActOnCXXTypeid(SourceLocation OpLoc, SourceLocation LParenLoc,
     return ExprError(Diag(OpLoc, diag::err_no_typeid_with_fno_rtti));
   }
 
+  // Warns when typeid is used with RTTI data disabled.
+  if (!getLangOpts().RTTIData)
+    Diag(OpLoc, diag::warn_no_typeid_with_rtti_disabled)
+        << (getDiagnostics().getDiagnosticOptions().getFormat() ==
+            DiagnosticOptions::MSVC);
+
   QualType TypeInfoType = Context.getTypeDeclType(CXXTypeInfoDecl);
 
   if (isType) {
@@ -4321,6 +4327,12 @@ Sema::PerformImplicitConversion(Expr *From, QualType ToType,
   case ICK_Vector_Conversion:
     From = ImpCastExprToType(From, ToType, CK_BitCast,
                              VK_RValue, /*BasePath=*/nullptr, CCK).get();
+    break;
+
+  case ICK_SVE_Vector_Conversion:
+    From = ImpCastExprToType(From, ToType, CK_BitCast, VK_RValue,
+                             /*BasePath=*/nullptr, CCK)
+               .get();
     break;
 
   case ICK_Vector_Splat: {
