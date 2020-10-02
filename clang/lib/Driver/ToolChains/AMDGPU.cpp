@@ -351,6 +351,7 @@ void amdgpu::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   std::string Linker = getToolChain().GetProgramPath(getShortName());
   ArgStringList CmdArgs;
+  addLinkerCompressDebugSectionsOption(getToolChain(), Args, CmdArgs);
   AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs, JA);
   CmdArgs.push_back("-shared");
   CmdArgs.push_back("-o");
@@ -389,16 +390,9 @@ void amdgpu::getAMDGPUTargetFeatures(const Driver &D,
     }
   }
 
-  if (Args.getLastArg(options::OPT_mwavefrontsize64)) {
-    Features.push_back("-wavefrontsize16");
-    Features.push_back("-wavefrontsize32");
+  if (Args.hasFlag(options::OPT_mwavefrontsize64,
+                   options::OPT_mno_wavefrontsize64, false))
     Features.push_back("+wavefrontsize64");
-  }
-  if (Args.getLastArg(options::OPT_mno_wavefrontsize64)) {
-    Features.push_back("-wavefrontsize16");
-    Features.push_back("+wavefrontsize32");
-    Features.push_back("-wavefrontsize64");
-  }
 
   handleTargetFeaturesGroup(
     Args, Features, options::OPT_m_amdgpu_Features_Group);
@@ -426,8 +420,11 @@ AMDGPUToolChain::TranslateArgs(const DerivedArgList &Args, StringRef BoundArch,
 
   if (!DAL)
     DAL = new DerivedArgList(Args.getBaseArgs());
-  for (auto *A : Args)
-    DAL->append(A);
+
+  for (Arg *A : Args) {
+    if (!shouldSkipArgument(A))
+      DAL->append(A);
+  }
 
   if (!Args.getLastArgValue(options::OPT_x).equals("cl"))
     return DAL;
@@ -642,4 +639,11 @@ void RocmInstallationDetector::addCommonBitcodeLibCC1Args(
 
   CC1Args.push_back(LinkBitcodeFlag);
   CC1Args.push_back(DriverArgs.MakeArgString(LibDeviceFile));
+}
+
+bool AMDGPUToolChain::shouldSkipArgument(const llvm::opt::Arg *A) const {
+  Option O = A->getOption();
+  if (O.matches(options::OPT_fPIE) || O.matches(options::OPT_fpie))
+    return true;
+  return false;
 }
