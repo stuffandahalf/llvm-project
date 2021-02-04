@@ -59,8 +59,9 @@ public:
     return llvm::DebuggerKind::LLDB;
   }
 
-  unsigned GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
-    return 2; // SSPStrong
+  LangOptions::StackProtectorMode
+  GetDefaultStackProtectorLevel(bool KernelOrKext) const override {
+    return LangOptions::SSPStrong;
   }
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
