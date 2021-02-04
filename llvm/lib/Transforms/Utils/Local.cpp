@@ -134,26 +134,9 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
   // Branch - See if we are conditional jumping on constant
   if (auto *BI = dyn_cast<BranchInst>(T)) {
     if (BI->isUnconditional()) return false;  // Can't optimize uncond branch
+
     BasicBlock *Dest1 = BI->getSuccessor(0);
     BasicBlock *Dest2 = BI->getSuccessor(1);
-
-    if (auto *Cond = dyn_cast<ConstantInt>(BI->getCondition())) {
-      // Are we branching on constant?
-      // YES.  Change to unconditional branch...
-      BasicBlock *Destination = Cond->getZExtValue() ? Dest1 : Dest2;
-      BasicBlock *OldDest     = Cond->getZExtValue() ? Dest2 : Dest1;
-
-      // Let the basic block know that we are letting go of it.  Based on this,
-      // it will adjust it's PHI nodes.
-      OldDest->removePredecessor(BB);
-
-      // Replace the conditional branch with an unconditional one.
-      Builder.CreateBr(Destination);
-      BI->eraseFromParent();
-      if (DTU)
-        DTU->applyUpdatesPermissive({{DominatorTree::Delete, BB, OldDest}});
-      return true;
-    }
 
     if (Dest2 == Dest1) {       // Conditional branch to same location?
       // This branch matches something like this:
@@ -172,6 +155,25 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
         RecursivelyDeleteTriviallyDeadInstructions(Cond, TLI);
       return true;
     }
+
+    if (auto *Cond = dyn_cast<ConstantInt>(BI->getCondition())) {
+      // Are we branching on constant?
+      // YES.  Change to unconditional branch...
+      BasicBlock *Destination = Cond->getZExtValue() ? Dest1 : Dest2;
+      BasicBlock *OldDest = Cond->getZExtValue() ? Dest2 : Dest1;
+
+      // Let the basic block know that we are letting go of it.  Based on this,
+      // it will adjust it's PHI nodes.
+      OldDest->removePredecessor(BB);
+
+      // Replace the conditional branch with an unconditional one.
+      Builder.CreateBr(Destination);
+      BI->eraseFromParent();
+      if (DTU)
+        DTU->applyUpdates({{DominatorTree::Delete, BB, OldDest}});
+      return true;
+    }
+
     return false;
   }
 
@@ -229,9 +231,6 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
         i = SI->removeCase(i);
         e = SI->case_end();
         Changed = true;
-        if (DTU)
-          DTU->applyUpdatesPermissive(
-              {{DominatorTree::Delete, ParentBB, DefaultDest}});
         continue;
       }
 
@@ -257,19 +256,19 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       // Insert the new branch.
       Builder.CreateBr(TheOnlyDest);
       BasicBlock *BB = SI->getParent();
-      std::vector <DominatorTree::UpdateType> Updates;
-      if (DTU)
-        Updates.reserve(SI->getNumSuccessors() - 1);
+
+      SmallSetVector<BasicBlock *, 8> RemovedSuccessors;
 
       // Remove entries from PHI nodes which we no longer branch to...
+      BasicBlock *SuccToKeep = TheOnlyDest;
       for (BasicBlock *Succ : successors(SI)) {
+        if (DTU && Succ != TheOnlyDest)
+          RemovedSuccessors.insert(Succ);
         // Found case matching a constant operand?
-        if (Succ == TheOnlyDest) {
-          TheOnlyDest = nullptr; // Don't modify the first branch to TheOnlyDest
+        if (Succ == SuccToKeep) {
+          SuccToKeep = nullptr; // Don't modify the first branch to TheOnlyDest
         } else {
           Succ->removePredecessor(BB);
-          if (DTU)
-            Updates.push_back({DominatorTree::Delete, BB, Succ});
         }
       }
 
@@ -278,8 +277,13 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       SI->eraseFromParent();
       if (DeleteDeadConditions)
         RecursivelyDeleteTriviallyDeadInstructions(Cond, TLI);
-      if (DTU)
-        DTU->applyUpdatesPermissive(Updates);
+      if (DTU) {
+        std::vector<DominatorTree::UpdateType> Updates;
+        Updates.reserve(RemovedSuccessors.size());
+        for (auto *RemovedSuccessor : RemovedSuccessors)
+          Updates.push_back({DominatorTree::Delete, BB, RemovedSuccessor});
+        DTU->applyUpdates(Updates);
+      }
       return true;
     }
 
@@ -325,22 +329,20 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
     if (auto *BA =
           dyn_cast<BlockAddress>(IBI->getAddress()->stripPointerCasts())) {
       BasicBlock *TheOnlyDest = BA->getBasicBlock();
-      std::vector <DominatorTree::UpdateType> Updates;
-      if (DTU)
-        Updates.reserve(IBI->getNumDestinations() - 1);
+      SmallSetVector<BasicBlock *, 8> RemovedSuccessors;
 
       // Insert the new branch.
       Builder.CreateBr(TheOnlyDest);
 
+      BasicBlock *SuccToKeep = TheOnlyDest;
       for (unsigned i = 0, e = IBI->getNumDestinations(); i != e; ++i) {
-        if (IBI->getDestination(i) == TheOnlyDest) {
-          TheOnlyDest = nullptr;
+        BasicBlock *DestBB = IBI->getDestination(i);
+        if (DTU && DestBB != TheOnlyDest)
+          RemovedSuccessors.insert(DestBB);
+        if (IBI->getDestination(i) == SuccToKeep) {
+          SuccToKeep = nullptr;
         } else {
-          BasicBlock *ParentBB = IBI->getParent();
-          BasicBlock *DestBB = IBI->getDestination(i);
-          DestBB->removePredecessor(ParentBB);
-          if (DTU)
-            Updates.push_back({DominatorTree::Delete, ParentBB, DestBB});
+          DestBB->removePredecessor(BB);
         }
       }
       Value *Address = IBI->getAddress();
@@ -357,13 +359,18 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       // If we didn't find our destination in the IBI successor list, then we
       // have undefined behavior.  Replace the unconditional branch with an
       // 'unreachable' instruction.
-      if (TheOnlyDest) {
+      if (SuccToKeep) {
         BB->getTerminator()->eraseFromParent();
         new UnreachableInst(BB->getContext(), BB);
       }
 
-      if (DTU)
-        DTU->applyUpdatesPermissive(Updates);
+      if (DTU) {
+        std::vector<DominatorTree::UpdateType> Updates;
+        Updates.reserve(RemovedSuccessors.size());
+        for (auto *RemovedSuccessor : RemovedSuccessors)
+          Updates.push_back({DominatorTree::Delete, BB, RemovedSuccessor});
+        DTU->applyUpdates(Updates);
+      }
       return true;
     }
   }
@@ -411,6 +418,14 @@ bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
     if (DLI->getLabel())
       return false;
     return true;
+  }
+
+  if (auto *CB = dyn_cast<CallBase>(I)) {
+    // Treat calls that may not return as alive.
+    // TODO: Remove the intrinsic escape hatch once all intrinsics set
+    // willreturn properly.
+    if (!CB->willReturn() && !isa<IntrinsicInst>(I))
+      return false;
   }
 
   if (!I->mayHaveSideEffects())
@@ -704,34 +719,6 @@ bool llvm::SimplifyInstructionsInBlock(BasicBlock *BB,
 //  Control Flow Graph Restructuring.
 //
 
-void llvm::RemovePredecessorAndSimplify(BasicBlock *BB, BasicBlock *Pred,
-                                        DomTreeUpdater *DTU) {
-  // This only adjusts blocks with PHI nodes.
-  if (!isa<PHINode>(BB->begin()))
-    return;
-
-  // Remove the entries for Pred from the PHI nodes in BB, but do not simplify
-  // them down.  This will leave us with single entry phi nodes and other phis
-  // that can be removed.
-  BB->removePredecessor(Pred, true);
-
-  WeakTrackingVH PhiIt = &BB->front();
-  while (PHINode *PN = dyn_cast<PHINode>(PhiIt)) {
-    PhiIt = &*++BasicBlock::iterator(cast<Instruction>(PhiIt));
-    Value *OldPhiIt = PhiIt;
-
-    if (!recursivelySimplifyInstruction(PN))
-      continue;
-
-    // If recursive simplification ended up deleting the next PHI node we would
-    // iterate to, then our iterator is invalid, restart scanning from the top
-    // of the block.
-    if (PhiIt != OldPhiIt) PhiIt = &BB->front();
-  }
-  if (DTU)
-    DTU->applyUpdatesPermissive({{DominatorTree::Delete, Pred, BB}});
-}
-
 void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB,
                                        DomTreeUpdater *DTU) {
 
@@ -756,13 +743,13 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB,
   SmallVector<DominatorTree::UpdateType, 32> Updates;
 
   if (DTU) {
-    Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
     for (auto I = pred_begin(PredBB), E = pred_end(PredBB); I != E; ++I) {
-      Updates.push_back({DominatorTree::Delete, *I, PredBB});
       // This predecessor of PredBB may already have DestBB as a successor.
-      if (llvm::find(successors(*I), DestBB) == succ_end(*I))
+      if (!llvm::is_contained(successors(*I), DestBB))
         Updates.push_back({DominatorTree::Insert, *I, DestBB});
+      Updates.push_back({DominatorTree::Delete, *I, PredBB});
     }
+    Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
   }
 
   // Zap anything that took the address of DestBB.  Not doing this will give the
@@ -1067,14 +1054,16 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
 
   SmallVector<DominatorTree::UpdateType, 32> Updates;
   if (DTU) {
-    Updates.push_back({DominatorTree::Delete, BB, Succ});
     // All predecessors of BB will be moved to Succ.
-    for (auto I = pred_begin(BB), E = pred_end(BB); I != E; ++I) {
-      Updates.push_back({DominatorTree::Delete, *I, BB});
+    SmallSetVector<BasicBlock *, 8> Predecessors(pred_begin(BB), pred_end(BB));
+    Updates.reserve(Updates.size() + 2 * Predecessors.size());
+    for (auto *Predecessor : Predecessors) {
       // This predecessor of BB may already have Succ as a successor.
-      if (llvm::find(successors(*I), Succ) == succ_end(*I))
-        Updates.push_back({DominatorTree::Insert, *I, Succ});
+      if (!llvm::is_contained(successors(Predecessor), Succ))
+        Updates.push_back({DominatorTree::Insert, Predecessor, Succ});
+      Updates.push_back({DominatorTree::Delete, Predecessor, BB});
     }
+    Updates.push_back({DominatorTree::Delete, BB, Succ});
   }
 
   if (isa<PHINode>(Succ->begin())) {
@@ -1130,7 +1119,7 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
                            "applying corresponding DTU updates.");
 
   if (DTU) {
-    DTU->applyUpdatesPermissive(Updates);
+    DTU->applyUpdates(Updates);
     DTU->deleteBB(BB);
   } else {
     BB->eraseFromParent(); // Delete the old basic block.
@@ -1368,16 +1357,22 @@ static bool PhiHasDebugValue(DILocalVariable *DIVar,
 /// least n bits.
 static bool valueCoversEntireFragment(Type *ValTy, DbgVariableIntrinsic *DII) {
   const DataLayout &DL = DII->getModule()->getDataLayout();
-  uint64_t ValueSize = DL.getTypeAllocSizeInBits(ValTy);
-  if (auto FragmentSize = DII->getFragmentSizeInBits())
-    return ValueSize >= *FragmentSize;
+  TypeSize ValueSize = DL.getTypeAllocSizeInBits(ValTy);
+  if (Optional<uint64_t> FragmentSize = DII->getFragmentSizeInBits()) {
+    assert(!ValueSize.isScalable() &&
+           "Fragments don't work on scalable types.");
+    return ValueSize.getFixedSize() >= *FragmentSize;
+  }
   // We can't always calculate the size of the DI variable (e.g. if it is a
   // VLA). Try to use the size of the alloca that the dbg intrinsic describes
   // intead.
   if (DII->isAddressOfVariable())
     if (auto *AI = dyn_cast_or_null<AllocaInst>(DII->getVariableLocation()))
-      if (auto FragmentSize = AI->getAllocationSizeInBits(DL))
-        return ValueSize >= *FragmentSize;
+      if (Optional<TypeSize> FragmentSize = AI->getAllocationSizeInBits(DL)) {
+        assert(ValueSize.isScalable() == FragmentSize->isScalable() &&
+               "Both sizes should agree on the scalable flag.");
+        return TypeSize::isKnownGE(ValueSize, *FragmentSize);
+      }
   // Could not determine size of variable. Conservatively return false.
   return false;
 }
@@ -1392,7 +1387,7 @@ static DebugLoc getDebugValueLoc(DbgVariableIntrinsic *DII, Instruction *Src) {
   MDNode *Scope = DeclareLoc.getScope();
   DILocation *InlinedAt = DeclareLoc.getInlinedAt();
   // Produce an unknown location with the correct scope / inlinedAt fields.
-  return DebugLoc::get(0, 0, Scope, InlinedAt);
+  return DILocation::get(DII->getContext(), 0, 0, Scope, InlinedAt);
 }
 
 /// Inserts a llvm.dbg.value intrinsic before a store to an alloca'd value
@@ -2038,19 +2033,18 @@ unsigned llvm::changeToUnreachable(Instruction *I, bool UseLLVMTrap,
                                    bool PreserveLCSSA, DomTreeUpdater *DTU,
                                    MemorySSAUpdater *MSSAU) {
   BasicBlock *BB = I->getParent();
-  std::vector <DominatorTree::UpdateType> Updates;
 
   if (MSSAU)
     MSSAU->changeToUnreachable(I);
 
+  SmallSetVector<BasicBlock *, 8> UniqueSuccessors;
+
   // Loop over all of the successors, removing BB's entry from any PHI
   // nodes.
-  if (DTU)
-    Updates.reserve(BB->getTerminator()->getNumSuccessors());
   for (BasicBlock *Successor : successors(BB)) {
     Successor->removePredecessor(BB, PreserveLCSSA);
     if (DTU)
-      Updates.push_back({DominatorTree::Delete, BB, Successor});
+      UniqueSuccessors.insert(Successor);
   }
   // Insert a call to llvm.trap right before this.  This turns the undefined
   // behavior into a hard fail instead of falling through into random code.
@@ -2072,13 +2066,18 @@ unsigned llvm::changeToUnreachable(Instruction *I, bool UseLLVMTrap,
     BB->getInstList().erase(BBI++);
     ++NumInstrsRemoved;
   }
-  if (DTU)
-    DTU->applyUpdatesPermissive(Updates);
+  if (DTU) {
+    SmallVector<DominatorTree::UpdateType, 8> Updates;
+    Updates.reserve(UniqueSuccessors.size());
+    for (BasicBlock *UniqueSuccessor : UniqueSuccessors)
+      Updates.push_back({DominatorTree::Delete, BB, UniqueSuccessor});
+    DTU->applyUpdates(Updates);
+  }
   return NumInstrsRemoved;
 }
 
 CallInst *llvm::createCallMatchingInvoke(InvokeInst *II) {
-  SmallVector<Value *, 8> Args(II->arg_begin(), II->arg_end());
+  SmallVector<Value *, 8> Args(II->args());
   SmallVector<OperandBundleDef, 1> OpBundles;
   II->getOperandBundlesAsDefs(OpBundles);
   CallInst *NewCall = CallInst::Create(II->getFunctionType(),
@@ -2119,7 +2118,7 @@ void llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
   UnwindDestBB->removePredecessor(BB);
   II->eraseFromParent();
   if (DTU)
-    DTU->applyUpdatesPermissive({{DominatorTree::Delete, BB, UnwindDestBB}});
+    DTU->applyUpdates({{DominatorTree::Delete, BB, UnwindDestBB}});
 }
 
 BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
@@ -2135,7 +2134,7 @@ BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
   BB->getInstList().pop_back();
 
   // Create the new invoke instruction.
-  SmallVector<Value *, 8> InvokeArgs(CI->arg_begin(), CI->arg_end());
+  SmallVector<Value *, 8> InvokeArgs(CI->args());
   SmallVector<OperandBundleDef, 1> OpBundles;
 
   CI->getOperandBundlesAsDefs(OpBundles);
@@ -2266,8 +2265,7 @@ static bool markAliveBlocks(Function &F,
           UnwindDestBB->removePredecessor(II->getParent());
           II->eraseFromParent();
           if (DTU)
-            DTU->applyUpdatesPermissive(
-                {{DominatorTree::Delete, BB, UnwindDestBB}});
+            DTU->applyUpdates({{DominatorTree::Delete, BB, UnwindDestBB}});
         } else
           changeToCall(II, DTU);
         Changed = true;
@@ -2296,6 +2294,7 @@ static bool markAliveBlocks(Function &F,
         }
       };
 
+      SmallMapVector<BasicBlock *, int, 8> NumPerSuccessorCases;
       // Set of unique CatchPads.
       SmallDenseMap<CatchPadInst *, detail::DenseSetEmpty, 4,
                     CatchPadDenseMapInfo, detail::DenseSetPair<CatchPadInst *>>
@@ -2305,14 +2304,22 @@ static bool markAliveBlocks(Function &F,
                                              E = CatchSwitch->handler_end();
            I != E; ++I) {
         BasicBlock *HandlerBB = *I;
+        ++NumPerSuccessorCases[HandlerBB];
         auto *CatchPad = cast<CatchPadInst>(HandlerBB->getFirstNonPHI());
         if (!HandlerSet.insert({CatchPad, Empty}).second) {
+          --NumPerSuccessorCases[HandlerBB];
           CatchSwitch->removeHandler(I);
           --I;
           --E;
           Changed = true;
         }
       }
+      std::vector<DominatorTree::UpdateType> Updates;
+      for (const std::pair<BasicBlock *, int> &I : NumPerSuccessorCases)
+        if (I.second == 0)
+          Updates.push_back({DominatorTree::Delete, BB, I.first});
+      if (DTU)
+        DTU->applyUpdates(Updates);
     }
 
     Changed |= ConstantFoldTerminator(BB, true, nullptr, DTU);
@@ -2356,7 +2363,7 @@ void llvm::removeUnwindEdge(BasicBlock *BB, DomTreeUpdater *DTU) {
   TI->replaceAllUsesWith(NewTI);
   TI->eraseFromParent();
   if (DTU)
-    DTU->applyUpdatesPermissive({{DominatorTree::Delete, BB, UnwindDest}});
+    DTU->applyUpdates({{DominatorTree::Delete, BB, UnwindDest}});
 }
 
 /// removeUnreachableBlocks - Remove blocks that are not reachable, even
@@ -2372,28 +2379,39 @@ bool llvm::removeUnreachableBlocks(Function &F, DomTreeUpdater *DTU,
     return Changed;
 
   assert(Reachable.size() < F.size());
-  NumRemoved += F.size() - Reachable.size();
 
-  SmallSetVector<BasicBlock *, 8> DeadBlockSet;
+  // Are there any blocks left to actually delete?
+  SmallSetVector<BasicBlock *, 8> BlocksToRemove;
   for (BasicBlock &BB : F) {
     // Skip reachable basic blocks
     if (Reachable.count(&BB))
       continue;
-    DeadBlockSet.insert(&BB);
+    // Skip already-deleted blocks
+    if (DTU && DTU->isBBPendingDeletion(&BB))
+      continue;
+    BlocksToRemove.insert(&BB);
   }
 
-  if (MSSAU)
-    MSSAU->removeBlocks(DeadBlockSet);
+  if (BlocksToRemove.empty())
+    return Changed;
 
-  // Loop over all of the basic blocks that are not reachable, dropping all of
+  Changed = true;
+  NumRemoved += BlocksToRemove.size();
+
+  if (MSSAU)
+    MSSAU->removeBlocks(BlocksToRemove);
+
+  // Loop over all of the basic blocks that are up for removal, dropping all of
   // their internal references. Update DTU if available.
   std::vector<DominatorTree::UpdateType> Updates;
-  for (auto *BB : DeadBlockSet) {
+  for (auto *BB : BlocksToRemove) {
+    SmallSetVector<BasicBlock *, 8> UniqueSuccessors;
     for (BasicBlock *Successor : successors(BB)) {
-      if (!DeadBlockSet.count(Successor))
+      // Only remove references to BB in reachable successors of BB.
+      if (Reachable.count(Successor))
         Successor->removePredecessor(BB);
       if (DTU)
-        Updates.push_back({DominatorTree::Delete, BB, Successor});
+        UniqueSuccessors.insert(Successor);
     }
     BB->dropAllReferences();
     if (DTU) {
@@ -2407,27 +2425,22 @@ bool llvm::removeUnreachableBlocks(Function &F, DomTreeUpdater *DTU,
       new UnreachableInst(BB->getContext(), BB);
       assert(succ_empty(BB) && "The successor list of BB isn't empty before "
                                "applying corresponding DTU updates.");
+      Updates.reserve(Updates.size() + UniqueSuccessors.size());
+      for (auto *UniqueSuccessor : UniqueSuccessors)
+        Updates.push_back({DominatorTree::Delete, BB, UniqueSuccessor});
     }
   }
 
   if (DTU) {
-    DTU->applyUpdatesPermissive(Updates);
-    bool Deleted = false;
-    for (auto *BB : DeadBlockSet) {
-      if (DTU->isBBPendingDeletion(BB))
-        --NumRemoved;
-      else
-        Deleted = true;
+    DTU->applyUpdates(Updates);
+    for (auto *BB : BlocksToRemove)
       DTU->deleteBB(BB);
-    }
-    if (!Deleted)
-      return false;
   } else {
-    for (auto *BB : DeadBlockSet)
+    for (auto *BB : BlocksToRemove)
       BB->eraseFromParent();
   }
 
-  return true;
+  return Changed;
 }
 
 void llvm::combineMetadata(Instruction *K, const Instruction *J,
@@ -2672,10 +2685,13 @@ bool llvm::callsGCLeafFunction(const CallBase *Call,
     if (F->hasFnAttribute("gc-leaf-function"))
       return true;
 
-    if (auto IID = F->getIntrinsicID())
+    if (auto IID = F->getIntrinsicID()) {
       // Most LLVM intrinsics do not take safepoints.
       return IID != Intrinsic::experimental_gc_statepoint &&
-             IID != Intrinsic::experimental_deoptimize;
+             IID != Intrinsic::experimental_deoptimize &&
+             IID != Intrinsic::memcpy_element_unordered_atomic &&
+             IID != Intrinsic::memmove_element_unordered_atomic;
+    }
   }
 
   // Lib calls can be materialized by some passes, and won't be
@@ -2803,7 +2819,7 @@ struct BitPart {
 
 /// Analyze the specified subexpression and see if it is capable of providing
 /// pieces of a bswap or bitreverse. The subexpression provides a potential
-/// piece of a bswap or bitreverse if it can be proven that each non-zero bit in
+/// piece of a bswap or bitreverse if it can be proved that each non-zero bit in
 /// the output of the expression came from a corresponding bit in some other
 /// value. This function is recursive, and the end result is a mapping of
 /// bitnumber to bitnumber. It is the caller's responsibility to validate that
@@ -2814,6 +2830,10 @@ struct BitPart {
 /// result and that all other bits are zero. This expression is accepted and a
 /// BitPart is returned with Provider set to %X and Provenance[24-31] set to
 /// [0-7].
+///
+/// For vector types, all analysis is performed at the per-element level. No
+/// cross-element analysis is supported (shuffle/insertion/reduction), and all
+/// constant masks must be splatted across all elements.
 ///
 /// To avoid revisiting values, the BitPart results are memoized into the
 /// provided map. To avoid unnecessary copying of BitParts, BitParts are
@@ -2940,6 +2960,38 @@ collectBitParts(Value *V, bool MatchBSwaps, bool MatchBitReversals,
       return Result;
     }
 
+    // BITREVERSE - most likely due to us previous matching a partial
+    // bitreverse.
+    if (match(V, m_BitReverse(m_Value(X)))) {
+      const auto &Res =
+          collectBitParts(X, MatchBSwaps, MatchBitReversals, BPS, Depth + 1);
+      if (!Res)
+        return Result;
+
+      Result = BitPart(Res->Provider, BitWidth);
+      for (unsigned BitIdx = 0; BitIdx < BitWidth; ++BitIdx)
+        Result->Provenance[(BitWidth - 1) - BitIdx] = Res->Provenance[BitIdx];
+      return Result;
+    }
+
+    // BSWAP - most likely due to us previous matching a partial bswap.
+    if (match(V, m_BSwap(m_Value(X)))) {
+      const auto &Res =
+          collectBitParts(X, MatchBSwaps, MatchBitReversals, BPS, Depth + 1);
+      if (!Res)
+        return Result;
+
+      unsigned ByteWidth = BitWidth / 8;
+      Result = BitPart(Res->Provider, BitWidth);
+      for (unsigned ByteIdx = 0; ByteIdx < ByteWidth; ++ByteIdx) {
+        unsigned ByteBitOfs = ByteIdx * 8;
+        for (unsigned BitIdx = 0; BitIdx < 8; ++BitIdx)
+          Result->Provenance[(BitWidth - 8 - ByteBitOfs) + BitIdx] =
+              Res->Provenance[ByteBitOfs + BitIdx];
+      }
+      return Result;
+    }
+
     // Funnel 'double' shifts take 3 operands, 2 inputs and the shift
     // amount (modulo).
     // fshl(X,Y,Z): (X << (Z % BW)) | (Y >> (BW - (Z % BW)))
@@ -3001,14 +3053,14 @@ bool llvm::recognizeBSwapOrBitReverseIdiom(
     return false;
   if (!MatchBSwaps && !MatchBitReversals)
     return false;
-  IntegerType *ITy = dyn_cast<IntegerType>(I->getType());
-  if (!ITy || ITy->getBitWidth() > 128)
-    return false;   // Can't do vectors or integers > 128 bits.
+  Type *ITy = I->getType();
+  if (!ITy->isIntOrIntVectorTy() || ITy->getScalarSizeInBits() > 128)
+    return false;  // Can't do integer/elements > 128 bits.
 
-  IntegerType *DemandedTy = ITy;
+  Type *DemandedTy = ITy;
   if (I->hasOneUse())
     if (auto *Trunc = dyn_cast<TruncInst>(I->user_back()))
-      DemandedTy = cast<IntegerType>(Trunc->getType());
+      DemandedTy = Trunc->getType();
 
   // Try to find all the pieces corresponding to the bswap.
   std::map<Value *, Optional<BitPart>> BPS;
@@ -3026,16 +3078,27 @@ bool llvm::recognizeBSwapOrBitReverseIdiom(
       BitProvenance = BitProvenance.drop_back();
     if (BitProvenance.empty())
       return false; // TODO - handle null value?
-    DemandedTy = IntegerType::get(I->getContext(), BitProvenance.size());
+    DemandedTy = Type::getIntNTy(I->getContext(), BitProvenance.size());
+    if (auto *IVecTy = dyn_cast<VectorType>(ITy))
+      DemandedTy = VectorType::get(DemandedTy, IVecTy);
   }
+
+  // Check BitProvenance hasn't found a source larger than the result type.
+  unsigned DemandedBW = DemandedTy->getScalarSizeInBits();
+  if (DemandedBW > ITy->getScalarSizeInBits())
+    return false;
 
   // Now, is the bit permutation correct for a bswap or a bitreverse? We can
   // only byteswap values with an even number of bytes.
-  unsigned DemandedBW = DemandedTy->getBitWidth();
+  APInt DemandedMask = APInt::getAllOnesValue(DemandedBW);
   bool OKForBSwap = MatchBSwaps && (DemandedBW % 16) == 0;
   bool OKForBitReverse = MatchBitReversals;
   for (unsigned BitIdx = 0;
        (BitIdx < DemandedBW) && (OKForBSwap || OKForBitReverse); ++BitIdx) {
+    if (BitProvenance[BitIdx] == BitPart::Unset) {
+      DemandedMask.clearBit(BitIdx);
+      continue;
+    }
     OKForBSwap &= bitTransformIsCorrectForBSwap(BitProvenance[BitIdx], BitIdx,
                                                 DemandedBW);
     OKForBitReverse &= bitTransformIsCorrectForBitReverse(BitProvenance[BitIdx],
@@ -3056,17 +3119,23 @@ bool llvm::recognizeBSwapOrBitReverseIdiom(
   // We may need to truncate the provider.
   if (DemandedTy != Provider->getType()) {
     auto *Trunc =
-        CastInst::Create(Instruction::Trunc, Provider, DemandedTy, "trunc", I);
+        CastInst::CreateIntegerCast(Provider, DemandedTy, false, "trunc", I);
     InsertedInsts.push_back(Trunc);
     Provider = Trunc;
   }
 
-  auto *CI = CallInst::Create(F, Provider, "rev", I);
-  InsertedInsts.push_back(CI);
+  Instruction *Result = CallInst::Create(F, Provider, "rev", I);
+  InsertedInsts.push_back(Result);
+
+  if (!DemandedMask.isAllOnesValue()) {
+    auto *Mask = ConstantInt::get(DemandedTy, DemandedMask);
+    Result = BinaryOperator::Create(Instruction::And, Result, Mask, "mask", I);
+    InsertedInsts.push_back(Result);
+  }
 
   // We may need to zeroextend back to the result type.
-  if (ITy != CI->getType()) {
-    auto *ExtInst = CastInst::Create(Instruction::ZExt, CI, ITy, "zext", I);
+  if (ITy != Result->getType()) {
+    auto *ExtInst = CastInst::CreateIntegerCast(Result, ITy, false, "zext", I);
     InsertedInsts.push_back(ExtInst);
   }
 

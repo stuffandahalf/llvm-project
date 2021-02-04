@@ -69,6 +69,28 @@ define <4 x i32> @emulated_const_neither_sufficient() {
   ret <4 x i32> <i32 1, i32 2, i32 undef, i32 4>
 }
 
+; CHECK-LABEL:  emulated_const_combined_sufficient_large:
+; CHECK-NEXT:   .functype       emulated_const_combined_sufficient_large () -> (v128)
+; SIMD-VM-NEXT: i64.const       $push0=, 506097522914230528
+; SIMD-VM-NEXT: i64x2.splat     $push1=, $pop0
+; SIMD-VM-NEXT: return  $pop1
+define <16 x i8> @emulated_const_combined_sufficient_large() {
+  ret <16 x i8> <i8 0, i8 undef, i8 2, i8 undef, i8 4, i8 undef, i8 6, i8 undef,
+                 i8 undef, i8 1, i8 undef, i8 3, i8 undef, i8 5, i8 undef, i8 7>
+}
+
+; CHECK-LABEL: emulated_const_neither_sufficient_large:
+; CHECK-NEXT:   .functype       emulated_const_neither_sufficient_large () -> (v128)
+; SIMD-VM-NEXT: i64.const       $push0=, -70368726997663744
+; SIMD-VM-NEXT: i64x2.splat     $push1=, $pop0
+; SIMD-VM-NEXT: i64.const       $push2=, 504408655873966336
+; SIMD-VM-NEXT: i64x2.replace_lane      $push3=, $pop1, 1, $pop2
+; SIMD-VM-NEXT: return  $pop3
+define <16 x i8> @emulated_const_neither_sufficient_large() {
+  ret <16 x i8> <i8 0, i8 undef, i8 2, i8 undef, i8 4, i8 undef, i8 6, i8 255,
+                 i8 undef, i8 1, i8 undef, i8 3, i8 undef, i8 5, i8 undef, i8 7>
+}
+
 ; CHECK-LABEL: same_const_one_replaced_i16x8:
 ; CHECK-NEXT:  .functype       same_const_one_replaced_i16x8 (i32) -> (v128)
 ; UNIMP-NEXT:  v128.const      $push[[L0:[0-9]+]]=, 42, 42, 42, 42, 42, 0, 42, 42
@@ -156,7 +178,7 @@ define <8 x i16> @splat_common_arg_i16x8(i16 %a, i16 %b, i16 %c) {
 
 ; CHECK-LABEL: swizzle_one_i8x16:
 ; CHECK-NEXT:  .functype       swizzle_one_i8x16 (v128, v128) -> (v128)
-; CHECK-NEXT:  v8x16.swizzle   $push[[L0:[0-9]+]]=, $0, $1
+; CHECK-NEXT:  i8x16.swizzle   $push[[L0:[0-9]+]]=, $0, $1
 ; CHECK-NEXT:  return          $pop[[L0]]
 define <16 x i8> @swizzle_one_i8x16(<16 x i8> %src, <16 x i8> %mask) {
   %m0 = extractelement <16 x i8> %mask, i32 0
@@ -167,7 +189,7 @@ define <16 x i8> @swizzle_one_i8x16(<16 x i8> %src, <16 x i8> %mask) {
 
 ; CHECK-LABEL: swizzle_all_i8x16:
 ; CHECK-NEXT:  .functype       swizzle_all_i8x16 (v128, v128) -> (v128)
-; CHECK-NEXT:  v8x16.swizzle   $push[[L0:[0-9]+]]=, $0, $1
+; CHECK-NEXT:  i8x16.swizzle   $push[[L0:[0-9]+]]=, $0, $1
 ; CHECK-NEXT:  return          $pop[[L0]]
 define <16 x i8> @swizzle_all_i8x16(<16 x i8> %src, <16 x i8> %mask) {
   %m0 = extractelement <16 x i8> %mask, i32 0
@@ -234,7 +256,7 @@ define <8 x i16> @swizzle_one_i16x8(<8 x i16> %src, <8 x i16> %mask) {
 
 ; CHECK-LABEL: mashup_swizzle_i8x16:
 ; CHECK-NEXT:  .functype       mashup_swizzle_i8x16 (v128, v128, i32) -> (v128)
-; CHECK-NEXT:  v8x16.swizzle   $push[[L0:[0-9]+]]=, $0, $1
+; CHECK-NEXT:  i8x16.swizzle   $push[[L0:[0-9]+]]=, $0, $1
 ; CHECK:       i8x16.replace_lane
 ; CHECK:       i8x16.replace_lane
 ; CHECK:       i8x16.replace_lane
